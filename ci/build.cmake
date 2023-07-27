@@ -1,0 +1,6 @@
+include("${CTEST_SCRIPT_DIRECTORY}/setup.cmake")
+
+ctest_start(APPEND)
+
+ctest_build(PARALLEL_LEVEL 2 VERBOSITY ALWAYS)
+ctest_submit(PARTS Build CAPTURE_CMAKE_ERROR SUBMIT_RESULT)

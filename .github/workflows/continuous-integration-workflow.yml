@@ -65,6 +65,17 @@ jobs:
           cd build
           cmake -DDESUL_ENABLE_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/usr/desul-install ..
           sudo cmake --build . --target install --parallel 2
+# WARNING: We use a dev build of CMake for demonstration purposes. Don't merge
+# this or do this in production as the file WILL disappear at some point. Once
+# this approach is approved and the feature upstreamed, we'll be able to use it
+# via a normal CMake release.
+      - name: Install CMake
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget
+          sudo mkdir -m a=rwx /opt/cmake-test
+          cd /opt/cmake-test
+          wget https://cmake.org/files/dev/cmake-3.27.20230703-g4a3c73b-linux-x86_64.tar.gz
+          tar --strip-components=1 -xf cmake-3.27.20230703-g4a3c73b-linux-x86_64.tar.gz
       - name: Checkout code
         uses: actions/checkout@v3
       - uses: actions/cache@v3
@@ -84,9 +95,11 @@ jobs:
       - name: maybe_install_clang_tidy
         if: ${{ matrix.clang-tidy != '' }}
         run: sudo apt-get update && sudo apt-get install -y clang-tidy
+# Replace `/opt/cmake-test/bin/ctest` with just `ctest`
       - name: Configure Kokkos
         run: |
-          cmake -B builddir \
+          mkdir -p builddir
+          printf '%s\n' \
             -DCMAKE_INSTALL_PREFIX=/usr \
             ${{ matrix.clang-tidy }} \
             -Ddesul_ROOT=/usr/desul-install/ \
@@ -102,15 +115,27 @@ jobs:
             -DCMAKE_CXX_FLAGS="-Werror ${{ matrix.cxx_extra_flags }}" \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=${{ matrix.cmake_build_type }}
+            -DCMAKE_BUILD_TYPE=${{ matrix.cmake_build_type }} \
+            > builddir/config
+          echo '#!/bin/bash' > builddir/run-ctest
+          echo \
+            /opt/cmake-test/bin/ctest \
+            -DCTEST_BUILD_NAME=kokkos-${{ matrix.distro }}-${{ matrix.cxx }}-${{ matrix.cmake_build_type }}-${{ matrix.backend }} \
+            -DCTEST_SOURCE_DIRECTORY='"$(pwd)"' \
+            -DCTEST_BINARY_DIRECTORY='"$(pwd)/builddir"' \
+            -DDASHBOARD_TRACK=Continuous \
+            '"$@"' \
+            >> builddir/run-ctest
+          chmod a+x builddir/run-ctest
+          builddir/run-ctest -S ci/configure.cmake
       - name: Build
         run: |
           ccache -z
-          cmake --build builddir --parallel 2
+          builddir/run-ctest -S ci/build.cmake
           ccache -s
       - name: Tests
         working-directory: builddir
-        run: ctest --output-on-failure
+        run: builddir/run-ctest -S ci/test.cmake
       - name: Test linking against build dir
         working-directory: example/build_cmake_installed
         run: |
@@ -127,3 +152,5 @@ jobs:
           cmake -B builddir -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
           cmake --build builddir
           cmake --build builddir --target test
+      - name: Finalize CDash
+        run: builddir/run-ctest -S ci/submit.cmake
